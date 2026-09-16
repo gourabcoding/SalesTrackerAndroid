@@ -4,202 +4,97 @@ import android.app.*;
 import android.os.*;
 import android.content.*;
 import android.graphics.Color;
+import android.net.Uri;
+import android.provider.Settings;
 import android.text.*;
 import android.view.*;
 import android.widget.*;
-import java.text.SimpleDateFormat;
+import org.json.*;
+import java.io.*;
+import java.text.*;
 import java.util.*;
+import java.util.zip.*;
 
 public class MainActivity extends Activity {
-    EditText item, qty, ubp, usp, discount, customer, address, phone, remarks;
-    Spinner seller;
-    TextView buying, selling, finalSelling, profit, ruminti, oindrila, date;
+    static final String PREF="sales_v2"; static final String KEY="records";
+    ArrayList<Sale> sales=new ArrayList<>(); LinearLayout root, content; TextView title;
+    EditText item,qty,ubp,usp,discount,customer,address,phone,remarks; Spinner seller;
+    TextView buying,selling,finalSelling,profit,ruminti,oindrila;
+    int editIndex=-1; ArrayList<Sale> filtered=new ArrayList<>(); Sale undoSale=null; int undoIndex=-1; Handler handler=new Handler(Looper.getMainLooper());
+    SimpleDateFormat dt=new SimpleDateFormat("dd-MM-yyyy HH:mm:ss",Locale.getDefault());
 
-    @Override public void onCreate(Bundle b) {
-        super.onCreate(b);
-        build();
-        calc();
+    public void onCreate(Bundle b){super.onCreate(b); load(); migrateOld(); showDashboard();}
+    int dp(int n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
+    TextView tv(String s,int sp){TextView t=new TextView(this);t.setText(s);t.setTextSize(sp);t.setTextColor(Color.rgb(24,33,47));return t;}
+    TextView section(String s){TextView t=tv(s,18);t.setTypeface(null,1);t.setTextColor(Color.rgb(23,59,115));t.setPadding(0,dp(14),0,dp(7));return t;}
+    EditText input(String hint){EditText e=new EditText(this);e.setHint(hint);e.setTextSize(15);e.setSingleLine(false);e.setBackgroundResource(com.example.salestracker.R.drawable.input_bg);e.setPadding(dp(12),dp(7),dp(12),dp(7));e.setLayoutParams(new LinearLayout.LayoutParams(-1,dp(48)));return e;}
+    TextView auto(String label){TextView t=tv(label,16);t.setTypeface(null,1);t.setTextColor(Color.rgb(36,107,54));t.setGravity(Gravity.CENTER_VERTICAL);t.setBackgroundResource(R.drawable.auto_bg);t.setLayoutParams(new LinearLayout.LayoutParams(-1,dp(48)));return t;}
+    void base(String page){root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(Color.rgb(245,247,251));
+      LinearLayout head=new LinearLayout(this);head.setOrientation(LinearLayout.VERTICAL);head.setPadding(dp(20),dp(16),dp(20),dp(14));head.setBackgroundColor(Color.rgb(23,59,115));
+      title=tv("Sales Tracker",25);title.setTextColor(Color.WHITE);title.setTypeface(null,1);head.addView(title);
+      TextView sub=tv("100% Offline  •  "+page,13);sub.setTextColor(Color.WHITE);head.addView(sub);root.addView(head);
+      content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(dp(16),dp(10),dp(16),dp(24));ScrollView sc=new ScrollView(this);sc.addView(content);root.addView(sc,new LinearLayout.LayoutParams(-1,0,1));
+      LinearLayout nav=new LinearLayout(this);nav.setPadding(dp(6),dp(4),dp(6),dp(4));nav.setBackgroundColor(Color.WHITE);
+      String[] ns={"Dashboard","New Sale","History","Tools"};for(String n:ns){Button b=new Button(this);b.setText(n);b.setTextSize(11);b.setAllCaps(false);b.setOnClickListener(v->{if(n.equals("Dashboard"))showDashboard();else if(n.equals("New Sale"))showSale(-1);else if(n.equals("History"))showHistory();else showTools();});nav.addView(b,new LinearLayout.LayoutParams(0,dp(52),1));}root.addView(nav);setContentView(root);
     }
+    void showDashboard(){base("Dashboard"); double total=0,prof=0,r=0,o=0;int qtys=0;for(Sale s:sales){total+=s.finalSell;prof+=s.profit;r+=s.rProfit;o+=s.oProfit;qtys+=s.qty;}
+      LinearLayout c=card();c.addView(section("Overview"));c.addView(tv("Total Sales",13));c.addView(big(money(total)));c.addView(tv("Items Sold: "+qtys+"    •    Entries: "+sales.size(),13));c.addView(tv("Total Profit",13));c.addView(big(money(prof)));c.addView(tv("Ruminti Profit: "+money(r)+"\nOindrila Profit: "+money(o),13));content.addView(c); TextView hint=tv("All data is stored locally on this phone. No cloud or online sync is used.",13);hint.setTextColor(Color.DKGRAY);hint.setPadding(0,dp(12),0,0);content.addView(hint);}
+    TextView big(String s){TextView t=tv(s,25);t.setTypeface(null,1);t.setTextColor(Color.rgb(36,87,166));t.setPadding(0,dp(4),0,dp(10));return t;}
+    LinearLayout card(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);l.setPadding(dp(16),dp(14),dp(16),dp(14));l.setBackgroundResource(R.drawable.card_bg);return l;}
+    void showSale(int idx){editIndex=idx;base(idx<0?"New Sale":"Edit Sale");
+      content.addView(section("Sale Information")); item=input("Item / Product name");addL("Item Name",item);qty=input("Whole number");qty.setInputType(2);addL("Quantity",qty);
+      seller=new Spinner(this);seller.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Ruminti","Oindrila"}));addL("Seller",seller);
+      ubp=input("₹ per unit");ubp.setInputType(2|8192);addL("Unit Buying Price",ubp);buying=auto("—");addL("Buying Price • automatic",buying);
+      usp=input("₹ per unit");usp.setInputType(2|8192);addL("Unit Selling Price",usp);selling=auto("—");addL("Selling Price • automatic",selling);
+      discount=input("0");discount.setInputType(2|8192);discount.setText("0");addL("Discount (%)",discount);finalSelling=auto("—");addL("Final Selling Price • automatic",finalSelling);profit=auto("—");addL("Profit • automatic",profit);ruminti=auto("—");addL("Profit Ruminti • automatic",ruminti);oindrila=auto("—");addL("Profit Oindrila • automatic",oindrila);
+      content.addView(section("Customer Information"));customer=input("Customer name");addL("Customer Name",customer);address=input("Customer address");address.setMinLines(2);addL("Customer Address",address);phone=input("Phone number");phone.setInputType(3);addL("Customer Phone",phone);remarks=input("Optional remarks");remarks.setMinLines(2);addL("Remarks",remarks);
+      if(idx>=0){Sale s=sales.get(idx);fill(s);}
+      TextView note=tv("Sale date & time is recorded automatically when you save. It cannot be edited.",12);note.setTextColor(Color.GRAY);note.setPadding(0,dp(10),0,dp(10));content.addView(note);
+      Button save=new Button(this);save.setText(idx<0?"SAVE SALE":"SAVE CHANGES");save.setOnClickListener(v->save());content.addView(save);Button cancel=new Button(this);cancel.setText("CANCEL");cancel.setOnClickListener(v->showHistory());content.addView(cancel);
+      TextWatcher w=new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int b,int c){}public void onTextChanged(CharSequence s,int a,int b,int c){calc();}public void afterTextChanged(Editable e){}};qty.addTextChangedListener(w);ubp.addTextChangedListener(w);usp.addTextChangedListener(w);discount.addTextChangedListener(w);seller.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onItemSelected(AdapterView<?> a,View v,int p,long id){calc();}public void onNothingSelected(AdapterView<?> a){}});calc();}
+    void addL(String label,View v){TextView l=tv(label,13);l.setTextColor(Color.rgb(102,112,133));l.setPadding(0,dp(7),0,dp(4));content.addView(l);content.addView(v);}
+    void fill(Sale s){item.setText(s.item);qty.setText(""+s.qty);seller.setSelection(s.seller.equals("Oindrila")?1:0);ubp.setText(fmt(s.ubp));usp.setText(fmt(s.usp));discount.setText(fmt(s.discount));customer.setText(s.customer);address.setText(s.address);phone.setText(s.phone);remarks.setText(s.remarks);}
+    void calc(){if(qty==null)return;double q=num(qty),b=q*num(ubp),ss=q*num(usp),d=num(discount),fs=ss*(1-d/100),p=fs-b;buying.setText(money(b));selling.setText(money(ss));finalSelling.setText(money(fs));profit.setText(money(p));if(seller.getSelectedItemPosition()==0){ruminti.setText(money(p*.6));oindrila.setText(money(p*.4));}else{ruminti.setText(money(p*.4));oindrila.setText(money(p*.6));}}
+    void save(){String qs=qty.getText().toString().trim();if(item.getText().toString().trim().isEmpty()){item.setError("Required");return;}if(!qs.matches("\\d+")||Integer.parseInt(qs)<=0){qty.setError("Whole number required");return;}double q=num(qty),b=q*num(ubp),ss=q*num(usp),d=num(discount),fs=ss*(1-d/100),p=fs-b; if(d<0||d>100){discount.setError("0 to 100");return;}Sale s=editIndex<0?new Sale():sales.get(editIndex);if(editIndex<0){s.id="SAL-"+new SimpleDateFormat("yyyyMMdd-HHmmss",Locale.US).format(new Date())+"-"+UUID.randomUUID().toString().substring(0,6).toUpperCase();s.created=System.currentTimeMillis();}s.item=item.getText().toString().trim();s.qty=(int)q;s.seller=seller.getSelectedItem().toString();s.ubp=num(ubp);s.buy=s.seller.length()>0?b:b;s.usp=num(usp);s.sell=ss;s.discount=d;s.finalSell=fs;s.profit=p;s.rProfit=seller.getSelectedItemPosition()==0?p*.6:p*.4;s.oProfit=seller.getSelectedItemPosition()==0?p*.4:p*.6;s.customer=customer.getText().toString().trim();s.address=address.getText().toString().trim();s.phone=phone.getText().toString().trim();s.remarks=remarks.getText().toString().trim();if(editIndex<0)sales.add(s);sortSales();persist();Toast.makeText(this,editIndex<0?"Sale saved offline":"Sale updated",Toast.LENGTH_SHORT).show();showHistory();}
+    void showHistory(){base("Sales History");
+      LinearLayout tools=card();
+      EditText search=input("Search item, customer, phone...");tools.addView(search);
+      LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);
+      Button filter=button("FILTER"); Button sort=button("NEWEST FIRST");
+      row.addView(filter,new LinearLayout.LayoutParams(0,dp(48),1));row.addView(sort,new LinearLayout.LayoutParams(0,dp(48),1));tools.addView(row);content.addView(tools);
+      if(undoSale!=null){Button undo=button("UNDO LAST DELETE");undo.setTextColor(Color.rgb(36,87,166));undo.setOnClickListener(v->{int pos=Math.max(0,Math.min(undoIndex,sales.size()));sales.add(pos,undoSale);undoSale=null;undoIndex=-1;persist();showHistory();});content.addView(undo);}
+      LinearLayout list=new LinearLayout(this);list.setOrientation(LinearLayout.VERTICAL);content.addView(list);
+      final boolean[] newest={true}; final String[] fFrom={""},fTo={""},fSeller={"All sellers"},fItem={""}; final int[] fDisc={0};
+      Runnable render=()->{list.removeAllViews();ArrayList<Integer> ids=new ArrayList<>();for(int i=0;i<sales.size();i++){Sale s=sales.get(i);String q=search.getText().toString().trim().toLowerCase(Locale.getDefault());String z=(s.item+" "+s.customer+" "+s.phone+" "+s.seller).toLowerCase(Locale.getDefault());if(!q.isEmpty()&&!z.contains(q))continue;if(!dateOK(s,fFrom[0],fTo[0]))continue;if(!fSeller[0].equals("All sellers")&&!s.seller.equals(fSeller[0]))continue;if(!fItem[0].isEmpty()&&!s.item.toLowerCase(Locale.getDefault()).contains(fItem[0].toLowerCase(Locale.getDefault())))continue;if(fDisc[0]==1&&s.discount<=0)continue;if(fDisc[0]==2&&s.discount>0)continue;ids.add(i);}if(!newest[0])Collections.reverse(ids);if(ids.isEmpty()){list.addView(tv("No matching sales.",15));return;}for(int ix:ids){Sale s=sales.get(ix);LinearLayout c=card();TextView h=tv(s.item+" × "+s.qty,18);h.setTypeface(null,1);c.addView(h);c.addView(tv(s.customer.isEmpty()?"Customer not entered":s.customer,13));c.addView(tv(s.dateString()+"  •  "+s.seller,12));c.addView(tv("Final Sale: "+money(s.finalSell)+"   Profit: "+money(s.profit),14));LinearLayout rr=new LinearLayout(this);Button e=button("EDIT");e.setOnClickListener(v->showSale(ix));Button del=button("DELETE");del.setTextColor(Color.rgb(198,40,40));del.setOnClickListener(v->confirmDelete(ix));rr.addView(e,new LinearLayout.LayoutParams(0,dp(48),1));rr.addView(del,new LinearLayout.LayoutParams(0,dp(48),1));c.addView(rr);list.addView(c,new LinearLayout.LayoutParams(-1,dp(170)));}};
+      search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int b,int c){}public void onTextChanged(CharSequence s,int a,int b,int c){render.run();}public void afterTextChanged(Editable e){}});
+      sort.setOnClickListener(v->{newest[0]=!newest[0];sort.setText(newest[0]?"NEWEST FIRST":"OLDEST FIRST");render.run();});
+      filter.setOnClickListener(v->{LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);l.setPadding(dp(8),0,dp(8),0);EditText from=input("DD-MM-YYYY");EditText to=input("DD-MM-YYYY");EditText prod=input("Product contains");Spinner sp=new Spinner(this);sp.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"All sellers","Ruminti","Oindrila"}));Spinner di=new Spinner(this);di.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Any discount","Discount > 0","No discount"}));l.addView(tv("Start date",12));l.addView(from);l.addView(tv("End date",12));l.addView(to);l.addView(tv("Seller",12));l.addView(sp);l.addView(tv("Item",12));l.addView(prod);l.addView(tv("Discount",12));l.addView(di);new AlertDialog.Builder(this).setTitle("Filter sales").setView(l).setNegativeButton("Cancel",null).setPositiveButton("Apply",(d,w)->{fFrom[0]=from.getText().toString().trim();fTo[0]=to.getText().toString().trim();fSeller[0]=sp.getSelectedItem().toString();fItem[0]=prod.getText().toString().trim();fDisc[0]=di.getSelectedItemPosition();render.run();}).show();});render.run();}
+    Button button(String s){Button b=new Button(this);b.setText(s);b.setAllCaps(false);return b;}
+    void confirmDelete(int i){new AlertDialog.Builder(this).setTitle("Delete this sale?").setMessage(sales.get(i).item+" × "+sales.get(i).qty+"\n"+sales.get(i).dateString()).setNegativeButton("Cancel",null).setPositiveButton("Delete",(d,w)->{undoSale=sales.remove(i);undoIndex=i;persist();showHistory();handler.postDelayed(()->{undoSale=null;undoIndex=-1;showHistory();},10000);}).show();}
+    void SnackbarToast(String s){Toast.makeText(this,s+"  (You can restore from Backup if needed)",Toast.LENGTH_LONG).show();}
+    void showTools(){base("Tools");Button ex=button("EXPORT EXCEL");ex.setOnClickListener(v->showExportFilters());content.addView(ex);Button backup=button("BACKUP APP DATA (.strack)");backup.setOnClickListener(v->createBackup());content.addView(backup);Button imp=button("IMPORT / MERGE (.strack)");imp.setOnClickListener(v->pickBackup());content.addView(imp);TextView t=tv("Import never auto-deletes duplicates. Every imported record is kept. After merge, records are sorted by Date + Time.\n\nBackup/Import is fully offline and uses Android's file picker/share system.",13);t.setPadding(0,dp(16),0,0);content.addView(t);}
+    void showExportFilters(){base("Excel Export Filters");content.addView(section("Optional filters"));EditText from=input("From date: DD-MM-YYYY (optional)");addL("Start Date",from);EditText to=input("To date: DD-MM-YYYY (optional)");addL("End Date",to);Spinner ss=new Spinner(this);ss.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"All sellers","Ruminti","Oindrila"}));addL("Seller",ss);EditText prod=input("Product contains (optional)");addL("Item / Product",prod);Spinner disc=new Spinner(this);disc.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Any discount","Discount > 0","No discount"}));addL("Discount",disc);Button go=button("EXPORT MATCHING RECORDS");go.setOnClickListener(v->{ArrayList<Sale> out=new ArrayList<>();for(Sale s:sales){if(!dateOK(s,from.getText().toString(),to.getText().toString()))continue;if(ss.getSelectedItemPosition()>0&&!s.seller.equals(ss.getSelectedItem().toString()))continue;if(!prod.getText().toString().trim().isEmpty()&&!s.item.toLowerCase(Locale.getDefault()).contains(prod.getText().toString().trim().toLowerCase(Locale.getDefault())))continue;if(disc.getSelectedItemPosition()==1&&s.discount<=0)continue;if(disc.getSelectedItemPosition()==2&&s.discount>0)continue;out.add(s);}createExcel(out);});content.addView(go);}
+    boolean dateOK(Sale s,String f,String t){try{SimpleDateFormat d=new SimpleDateFormat("dd-MM-yyyy",Locale.US);Date x=d.parse(s.dateString().substring(0,10));if(!f.trim().isEmpty()&&x.before(d.parse(f.trim())))return false;if(!t.trim().isEmpty()&&x.after(d.parse(t.trim())))return false;return true;}catch(Exception e){return true;}}
+    void createExcel(ArrayList<Sale> out){Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");i.putExtra(Intent.EXTRA_TITLE,"SalesTracker_Export_"+new SimpleDateFormat("yyyyMMdd-HHmm",Locale.US).format(new Date())+".xlsx");pendingExcel=out;startActivityForResult(i,20);}
+    ArrayList<Sale> pendingExcel;
+    void createBackup(){Intent i=new Intent(Intent.ACTION_CREATE_DOCUMENT);i.setType("application/octet-stream");i.putExtra(Intent.EXTRA_TITLE,"SalesTracker_Backup_"+new SimpleDateFormat("yyyyMMdd-HHmm",Locale.US).format(new Date())+".strack");startActivityForResult(i,21);}
+    void pickBackup(){Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,22);}
+    protected void onActivityResult(int r,int c,Intent data){super.onActivityResult(r,c,data);if(c!=RESULT_OK||data==null)return;try{if(r==20){OutputStream o=getContentResolver().openOutputStream(data.getData());writeExcel(o,pendingExcel);o.close();Toast.makeText(this,"Excel exported",Toast.LENGTH_SHORT).show();}else if(r==21){OutputStream o=getContentResolver().openOutputStream(data.getData());o.write(toJson().toString().getBytes("UTF-8"));o.close();Toast.makeText(this,"Backup created",Toast.LENGTH_SHORT).show();}else if(r==22){InputStream in=getContentResolver().openInputStream(data.getData());String text=readAll(in);in.close();JSONObject obj=new JSONObject(text);JSONArray a=obj.getJSONArray("sales");int before=sales.size();for(int j=0;j<a.length();j++){Sale s=Sale.from(a.getJSONObject(j));if(s.id==null||s.id.isEmpty())s.id="IMP-"+UUID.randomUUID().toString();sales.add(s);}sortSales();persist();Toast.makeText(this,(sales.size()-before)+" records imported",Toast.LENGTH_LONG).show();showHistory();}}catch(Exception e){new AlertDialog.Builder(this).setTitle("Import/Export error").setMessage(e.getMessage()).setPositiveButton("OK",null).show();}}
+    String readAll(InputStream in)throws Exception{ByteArrayOutputStream b=new ByteArrayOutputStream();byte[] x=new byte[8192];int n;while((n=in.read(x))>0)b.write(x,0,n);return b.toString("UTF-8");}
+    void writeExcel(OutputStream out,ArrayList<Sale> a)throws Exception{ZipOutputStream z=new ZipOutputStream(out);put(z,"[Content_Types].xml","<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/></Types>");put(z,"_rels/.rels","<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>");put(z,"xl/workbook.xml","<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name=\"Sales\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");put(z,"xl/_rels/workbook.xml.rels","<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>");StringBuilder s=new StringBuilder("<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");String[] h={"Sale ID","Date & Time","Item Name","Quantity","Seller","Unit Buying Price","Buying Price","Unit Selling Price","Selling Price","Discount (%)","Final Selling Price","Profit","Profit Ruminti","Profit Oindrila","Customer Name","Customer Address","Customer Phone","Remarks"};s.append("<row>");for(String x:h)s.append(cell(x));s.append("</row>");for(Sale q:a){s.append("<row>");String[] v={q.id,q.dateString(),q.item,""+q.qty,q.seller,fmt(q.ubp),fmt(q.buy),fmt(q.usp),fmt(q.sell),fmt(q.discount),fmt(q.finalSell),fmt(q.profit),fmt(q.rProfit),fmt(q.oProfit),q.customer,q.address,q.phone,q.remarks};for(String x:v)s.append(cell(x));s.append("</row>");}s.append("</sheetData></worksheet>");put(z,"xl/worksheets/sheet1.xml",s.toString());z.close();}
+    String cell(String x){return "<c t=\"inlineStr\"><is><t>"+esc(x)+"</t></is></c>";}String esc(String s){return s==null?"":s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace("\"","&quot;").replace("'","&apos;");}
+    void put(ZipOutputStream z,String name,String txt)throws Exception{z.putNextEntry(new ZipEntry(name));z.write(txt.getBytes("UTF-8"));z.closeEntry();}
+    JSONObject toJson(){JSONObject o=new JSONObject();JSONArray a=new JSONArray();try{for(Sale s:sales)a.put(s.toJson());o.put("formatVersion",2);o.put("sales",a);}catch(Exception e){}return o;}
+    void load(){String x=getSharedPreferences(PREF,MODE_PRIVATE).getString(KEY,null);if(x!=null)try{JSONArray a=new JSONArray(x);for(int i=0;i<a.length();i++)sales.add(Sale.from(a.getJSONObject(i)));sortSales();}catch(Exception ignored){}}
+    void migrateOld(){SharedPreferences old=getSharedPreferences("sales",MODE_PRIVATE);if(sales.size()==0&&old.contains("count")){int n=old.getInt("count",0);for(int i=1;i<=n;i++){String r=old.getString("sale_"+i,null);if(r==null)continue;String[] p=r.split("\\|",-1);if(p.length<12)continue;try{Sale s=new Sale();s.id="LEGACY-"+i+"-"+UUID.randomUUID().toString().substring(0,5);s.created=System.currentTimeMillis()+i;s.item=p[0];s.qty=Integer.parseInt(p[1]);s.seller=p[2];s.ubp=Double.parseDouble(p[3]);s.buy=s.qty*s.ubp;s.usp=Double.parseDouble(p[4]);s.sell=s.qty*s.usp;s.discount=Double.parseDouble(p[5]);s.finalSell=s.sell*(1-s.discount/100);s.profit=s.finalSell-s.buy;s.rProfit=s.seller.equals("Ruminti")?s.profit*.6:s.profit*.4;s.oProfit=s.profit-s.rProfit;s.legacyDate=p[6];s.customer=p[7];s.address=p[8];s.phone=p[9];s.remarks=p[10];sales.add(s);}catch(Exception ignored){}}sortSales();persist();}}
+    void sortSales(){Collections.sort(sales,(a,b)->Long.compare(a.sortTime(),b.sortTime()));}
+    void persist(){getSharedPreferences(PREF,MODE_PRIVATE).edit().putString(KEY,toJsonArray()).apply();}
+    String toJsonArray(){JSONArray a=new JSONArray();try{for(Sale s:sales)a.put(s.toJson());}catch(Exception e){}return a.toString();}
+    double num(EditText e){try{return Double.parseDouble(e.getText().toString().trim());}catch(Exception x){return 0;}}String money(double x){return String.format(Locale.getDefault(),"₹ %.2f",x);}String fmt(double x){return String.format(Locale.US,"%.2f",x);}
 
-    TextView label(String s) {
-        TextView t=new TextView(this);
-        t.setText(s); t.setTextSize(14); t.setPadding(0,14,0,5);
-        return t;
-    }
-
-    EditText input(String hint) {
-        EditText e=new EditText(this);
-        e.setHint(hint); e.setPadding(12,8,12,8);
-        return e;
-    }
-
-    TextView autoField() {
-        TextView t=new TextView(this);
-        t.setTextSize(17); t.setTextColor(Color.rgb(31,78,120));
-        t.setTypeface(null,1); t.setPadding(12,10,12,10);
-        t.setBackgroundColor(Color.rgb(226,240,217));
-        return t;
-    }
-
-    void build() {
-        ScrollView sc=new ScrollView(this);
-        LinearLayout root=new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24,20,24,30);
-        sc.addView(root);
-
-        TextView title=new TextView(this);
-        title.setText("Sales Tracker");
-        title.setTextSize(28); title.setTypeface(null,1);
-        title.setTextColor(Color.rgb(31,78,120));
-        root.addView(title);
-
-        TextView sub=new TextView(this);
-        sub.setText("Offline • Sales data stays on this phone");
-        root.addView(sub);
-
-        root.addView(label("Item Name"));
-        item=input("Enter item name"); root.addView(item);
-
-        root.addView(label("Quantity (whole number)"));
-        qty=input("1, 2, 3...");
-        qty.setInputType(2); root.addView(qty);
-
-        root.addView(label("Seller"));
-        seller=new Spinner(this);
-        seller.setAdapter(new ArrayAdapter<String>(this,
-            android.R.layout.simple_spinner_dropdown_item,
-            new String[]{"Ruminti","Oindrila"}));
-        root.addView(seller);
-
-        root.addView(label("Unit Buying Price"));
-        ubp=input("₹ per unit"); ubp.setInputType(2|8192); root.addView(ubp);
-
-        root.addView(label("Buying Price (automatic)"));
-        buying=autoField(); root.addView(buying);
-
-        root.addView(label("Unit Selling Price"));
-        usp=input("₹ per unit"); usp.setInputType(2|8192); root.addView(usp);
-
-        root.addView(label("Selling Price (automatic)"));
-        selling=autoField(); root.addView(selling);
-
-        root.addView(label("Discount If Any (%)"));
-        discount=input("0"); discount.setInputType(2|8192); discount.setText("0"); root.addView(discount);
-
-        root.addView(label("Final Selling Price (automatic)"));
-        finalSelling=autoField(); root.addView(finalSelling);
-
-        root.addView(label("Profit (automatic)"));
-        profit=autoField(); root.addView(profit);
-
-        root.addView(label("Profit Ruminti (automatic)"));
-        ruminti=autoField(); root.addView(ruminti);
-
-        root.addView(label("Profit Oindrila (automatic)"));
-        oindrila=autoField(); root.addView(oindrila);
-
-        root.addView(label("Date of Sale"));
-        date=new TextView(this);
-        date.setText(dateNow()); date.setTextSize(16); date.setPadding(12,14,12,14);
-        date.setBackgroundColor(Color.rgb(245,245,245));
-        date.setOnClickListener(v -> pickDate());
-        root.addView(date);
-
-        root.addView(label("Customer Name"));
-        customer=input("Customer name"); root.addView(customer);
-
-        root.addView(label("Customer Address"));
-        address=input("Customer address"); address.setMinLines(2); root.addView(address);
-
-        root.addView(label("Customer Phone Number"));
-        phone=input("Phone number"); phone.setInputType(3); root.addView(phone);
-
-        root.addView(label("Remarks If Any"));
-        remarks=input("Optional remarks"); remarks.setMinLines(2); root.addView(remarks);
-
-        Button save=new Button(this);
-        save.setText("SAVE SALE");
-        save.setOnClickListener(v -> saveSale());
-        root.addView(save);
-
-        TextView rules=new TextView(this);
-        rules.setText("\nRules:\nBuying = Quantity × Unit Buying Price\nSelling = Quantity × Unit Selling Price\nFinal Selling = Selling Price − Discount\nProfit = Final Selling Price − Buying Price\nRuminti: 60% / Oindrila: 40%\nOindrila: 60% / Ruminti: 40%");
-        root.addView(rules);
-
-        TextWatcher w=new TextWatcher(){
-            public void beforeTextChanged(CharSequence s,int a,int c,int d){}
-            public void onTextChanged(CharSequence s,int a,int b,int c){calc();}
-            public void afterTextChanged(Editable e){}
-        };
-        qty.addTextChangedListener(w); ubp.addTextChangedListener(w);
-        usp.addTextChangedListener(w); discount.addTextChangedListener(w);
-        seller.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){
-            public void onItemSelected(AdapterView<?> p, View v,int pos,long id){calc();}
-            public void onNothingSelected(AdapterView<?> p){}
-        });
-
-        setContentView(sc);
-    }
-
-    String dateNow() {
-        return new SimpleDateFormat("dd-MM-yyyy",Locale.getDefault()).format(new Date());
-    }
-
-    void pickDate() {
-        Calendar c=Calendar.getInstance();
-        new DatePickerDialog(this,(v,y,m,d) ->
-            date.setText(String.format(Locale.getDefault(),"%02d-%02d-%04d",d,m+1,y)),
-            c.get(Calendar.YEAR),c.get(Calendar.MONTH),c.get(Calendar.DAY_OF_MONTH)).show();
-    }
-
-    double num(EditText e) {
-        try { return Double.parseDouble(e.getText().toString()); }
-        catch(Exception x) { return 0; }
-    }
-
-    String money(double x) {
-        return String.format(Locale.getDefault(),"₹ %.2f",x);
-    }
-
-    void calc() {
-        double q=num(qty);
-        double b=q*num(ubp);
-        double s=q*num(usp);
-        double d=num(discount);
-        double fs=s*(1-d/100.0);
-        double p=fs-b;
-
-        buying.setText(money(b));
-        selling.setText(money(s));
-        finalSelling.setText(money(fs));
-        profit.setText(money(p));
-
-        if(seller.getSelectedItemPosition()==0) {
-            ruminti.setText(money(p*.60)); oindrila.setText(money(p*.40));
-        } else {
-            ruminti.setText(money(p*.40)); oindrila.setText(money(p*.60));
-        }
-    }
-
-    void saveSale() {
-        String q=qty.getText().toString().trim();
-        if(q.isEmpty() || !q.matches("\\d+")) {
-            qty.setError("Whole number required"); return;
-        }
-
-        SharedPreferences sp=getSharedPreferences("sales",MODE_PRIVATE);
-        int n=sp.getInt("count",0)+1;
-        String record=item.getText()+"|"+q+"|"+seller.getSelectedItem()+"|"+
-            ubp.getText()+"|"+usp.getText()+"|"+discount.getText()+"|"+
-            date.getText()+"|"+customer.getText()+"|"+address.getText()+"|"+
-            phone.getText()+"|"+remarks.getText()+"|"+profit.getText();
-
-        sp.edit().putInt("count",n).putString("sale_"+n,record).apply();
-        Toast.makeText(this,"Sale saved offline",Toast.LENGTH_SHORT).show();
-
-        item.setText(""); qty.setText(""); ubp.setText(""); usp.setText("");
-        discount.setText("0"); customer.setText(""); address.setText("");
-        phone.setText(""); remarks.setText("");
-    }
+    static class Sale{String id,item,seller,customer,address,phone,remarks,legacyDate="";int qty;long created;double ubp,buy,usp,sell,discount,finalSell,profit,rProfit,oProfit;
+      String dateString(){return legacyDate!=null&&!legacyDate.isEmpty()?legacyDate: new SimpleDateFormat("dd-MM-yyyy HH:mm:ss",Locale.getDefault()).format(new Date(created));}
+      long sortTime(){if(legacyDate!=null&&!legacyDate.isEmpty())try{return new SimpleDateFormat("dd-MM-yyyy",Locale.US).parse(legacyDate.substring(0,10)).getTime()+created%86400000;}catch(Exception e){}return created;}
+      JSONObject toJson()throws JSONException{JSONObject o=new JSONObject();o.put("id",id);o.put("item",item);o.put("qty",qty);o.put("seller",seller);o.put("created",created);o.put("ubp",ubp);o.put("buy",buy);o.put("usp",usp);o.put("sell",sell);o.put("discount",discount);o.put("finalSell",finalSell);o.put("profit",profit);o.put("rProfit",rProfit);o.put("oProfit",oProfit);o.put("customer",customer);o.put("address",address);o.put("phone",phone);o.put("remarks",remarks);o.put("legacyDate",legacyDate);return o;}
+      static Sale from(JSONObject o)throws JSONException{Sale s=new Sale();s.id=o.optString("id","");s.item=o.optString("item","");s.qty=o.optInt("qty",0);s.seller=o.optString("seller","Ruminti");s.created=o.optLong("created",System.currentTimeMillis());s.ubp=o.optDouble("ubp",0);s.buy=o.optDouble("buy",s.qty*s.ubp);s.usp=o.optDouble("usp",0);s.sell=o.optDouble("sell",s.qty*s.usp);s.discount=o.optDouble("discount",0);s.finalSell=o.optDouble("finalSell",s.sell*(1-s.discount/100));s.profit=o.optDouble("profit",s.finalSell-s.buy);s.rProfit=o.optDouble("rProfit",s.seller.equals("Ruminti")?s.profit*.6:s.profit*.4);s.oProfit=o.optDouble("oProfit",s.profit-s.rProfit);s.customer=o.optString("customer","");s.address=o.optString("address","");s.phone=o.optString("phone","");s.remarks=o.optString("remarks","");s.legacyDate=o.optString("legacyDate","");return s;}}
 }
